@@ -210,11 +210,9 @@ with tab_main:
     if go and quick_mode:
         with st.spinner("Collecting data and drafting the ticket… (~10s)"):
             st.session_state["quick"] = run_quick(raw, model)
-        st.session_state.pop("last", None)
     if quick_mode and "quick" in st.session_state:
         render_quick(st.session_state["quick"])
     if go and not quick_mode:
-        st.session_state.pop("quick", None)
         with st.spinner("Asking Gemma 4… (expert mode ~20-35s)"):
             with ThreadPoolExecutor(2) as pool:
                 fe = pool.submit(run_expert, raw, model, use_cache, use_history and not use_cache, use_changes and not use_cache)
