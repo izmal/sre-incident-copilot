@@ -162,9 +162,41 @@ Full table: [`evaluation/results/summary.md`](evaluation/results/summary.md). Ra
   (dangerous actions → `requires_approval=true`, unknown rule ids removed, urgency taken from the deterministic analyzer).
 - If the API fails, the UI shows a clear error plus the deterministic analysis, never a made-up conclusion.
 
+## Vision: from alert to fix
+
+The target product is a runtime assistant wired into live data, not a paste box. Three stages, each with the same
+principle as today: facts and safety come from code, judgement comes from expertise, the LLM connects them.
+
+```
+INPUT (live data)                 ANALYSIS (data, trends, history)            OUTPUT (from advice to a fix)
+─────────────────                 ────────────────────────────────            ─────────────────────────────
+Alertmanager webhooks             real metrics via read-only PromQL:          1. Action plan: what to check,
+Prometheus metrics + thresholds     predict_linear, offset 1w, seasonality       what is safe, what needs approval
+Releases / CI-CD / git commits    correlate the start of the problem with     2. Prepared fix: exact command,
+Jira tickets, change calendar       releases, config and infra changes           PR or Jira change request,
+Slack incident channels           similar past incidents and their outcomes      dry-run output, rollback step
+Kubernetes / cloud state (r/o)    expert rules + impact / blast radius        3. One-click fix: only when confident
+Incident history (feedback loop)  deterministic urgency, confidence score        and the action is allow-listed
+```
+
+**Levels of autonomy.** The Copilot only earns the right to act step by step, following the author's
+"fix fast, but don't make it worse" rule:
+
+| Level | What the Copilot does | When |
+|---|---|---|
+| 0. Advise (**today**) | Action plan, risks, missing context, incident update | Always |
+| 1. Prepare | Exact commands / PR / change request with dry-run and rollback; a human runs them | Read-only data confirms the diagnosis |
+| 2. Fix with one click | A button that executes an allow-listed, reversible action (pause a batch job, rotate logs, expand a PVC on a StorageClass that supports it), then verifies the effect and rolls back if needed | High confidence, action in the allow-list, no rule forbids it, RBAC and target environment checked, approved by the on-call |
+| Never automatic | Deleting data, dropping collections, compact / resync, deleting PVCs, restarting primaries | Always a human decision (`dangerous_actions` in YAML) |
+
+Every executed action is logged and its outcome feeds back into the incident history, so the next recommendation
+knows whether it helped or made things worse.
+
 ## Roadmap
 
-- Feedback loop, next steps: turn repeated bad outcomes into proposed YAML constraints for expert review; semantic similarity instead of component/category matching; shared storage instead of a local file.
-- Prometheus/Alertmanager webhook integration and read-only PromQL / `kubectl` tools (real trends instead of a single growth rate, `offset 1w` comparisons), with traces.
-- More domains: PostgreSQL WAL, Kafka retention, memory/CPU saturation, 5xx (where the "don't scale into a cascade" rule matters most).
-- Local inference via Ollama.
+1. **Input:** Alertmanager webhook receiver; read-only PromQL so trends come from real data (`predict_linear`, `offset 1w`), not a single growth rate.
+2. **Context:** connectors for releases / CI-CD and git, Jira change tickets, Slack incident channels, read-only `kubectl`, with every tool call shown in the trace.
+3. **Output level 1:** prepared commands, PRs and change requests with dry-run and rollback.
+4. **Output level 2:** one-click fixes for an allow-list of reversible actions, with RBAC, approval, verification and an audit log.
+5. Feedback loop: turn repeated bad outcomes into proposed YAML constraints for expert review; semantic similarity; shared storage.
+6. More domains: PostgreSQL WAL, Kafka retention, memory/CPU saturation, 5xx (where the "don't scale into a cascade" rule matters most). Local inference via Ollama.
