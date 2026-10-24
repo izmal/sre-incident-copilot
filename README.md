@@ -22,6 +22,7 @@ those questions and the hard-learned "never do this" rules into a pipeline aroun
 Alert JSON / text
   → Normalizer          parses Alertmanager JSON, units (GiB, MiB/min), metrics from text      src/normalizer.py
   → Risk analyzer       deterministic used %, time-to-exhaustion, urgency policy (no LLM math)  src/risk_analyzer.py
+  → Change connector    releases, commits, Jira, Slack, calendar correlated by host/service    src/changes.py
   → Expert rule engine  picks matching YAML rules (Linux / Kubernetes / MongoDB / global)       src/expert_engine.py
   → Incident history    similar past incidents + their outcomes (helped / no effect / worse)   src/feedback.py
   → Gemma 4             writes the plan from facts + rules; alert text is fenced as untrusted   src/pipeline.py, src/llm_provider.py
@@ -29,7 +30,23 @@ Alert JSON / text
                         actions and actions that made things worse before forced to "needs approval"
   → UI                  plan, missing context, trace, side-by-side with plain Gemma,            app.py
                         "close the loop" form that records the outcome
+  → Prepare fix         level 1: commands, dry-run, verify, rollback for one action;          src/remediation.py
+                        allow-list + guard decide the status. Nothing is executed.
 ```
+
+**Change connector.** Looking around for releases and recent changes is the most often missed step, so the Copilot
+does it automatically. In the MVP it reads a synthetic feed ([`context/changes_feed.json`](context/changes_feed.json))
+in the shape a real git / CI-CD / Jira / Slack connector returns, and correlates events with the alert by host,
+replica set, namespace, PVC and service names (48h window; unrelated network work and frontend deploys are filtered out).
+For the MongoDB scenario it finds the `orders-service` deploy, the commit "add order_events collection, TTL later"
+and the backfill announced in Slack, and the plan names them as the likely cause.
+
+**Prepare fix (level 1).** Each immediate action has a 🛠 *Prepare fix* button. Gemma writes the exact commands:
+a dry-run or preview, the change, verification with expected output, and a rollback, plus what could get worse and the blast radius.
+Code decides the status, not the model: an action that matches the
+[remediation allow-list](expertise/remediation_allowlist.yaml) (pause a writer, rotate logs, expand a PVC, revert a change…)
+is marked as a candidate for a future one-click fix. A dangerous command (`dangerous_actions` in the rules) makes it
+"needs a human decision". The *Apply* button is visible but disabled: execution is level 2.
 
 **Feedback loop.** After the incident the engineer records which actions were taken and whether they
 ✅ helped, ➖ had no effect or ❌ made it worse (saved to `feedback/incidents.jsonl`). On the next similar alert
@@ -152,7 +169,8 @@ Full table: [`evaluation/results/summary.md`](evaluation/results/summary.md). Ra
 - Free-text metric extraction is regex-based; structured `observed_metrics` is more reliable.
 - Rules reflect one engineer's experience and need review for your environment (thresholds are config).
 - The rubric is keyword-based: it checks that key points are present, not that the prose is perfect. 11 cases are indicative, not proof.
-- Incident history matching is simple (component + category + alert name/host); the evaluation runs **without** history so its numbers do not depend on local feedback. The history file is local and per installation.
+- The change feed is synthetic; correlation is by name matching (host, service, namespace), so a change to a dependency with a different name is missed. Prepared commands use `<placeholders>` for unknown names and must be reviewed.
+- Incident history matching is simple (component + category + alert name/host); the evaluation runs **without** history and the change feed so its numbers do not depend on local feedback. The history file is local and per installation.
 - Alert text is sent to the Gemini API (hosted). Use synthetic or anonymized data; secrets in alerts are not scrubbed yet.
 
 ## Safety
@@ -185,7 +203,7 @@ Incident history (feedback loop)  deterministic urgency, confidence score       
 | Level | What the Copilot does | When |
 |---|---|---|
 | 0. Advise (**today**) | Action plan, risks, missing context, incident update | Always |
-| 1. Prepare | Exact commands / PR / change request with dry-run and rollback; a human runs them | Read-only data confirms the diagnosis |
+| 1. Prepare (**today: 🛠 Prepare fix**) | Exact commands with dry-run, verification and rollback; a human runs them. Next: PR / change request | Read-only data confirms the diagnosis |
 | 2. Fix with one click | A button that executes an allow-listed, reversible action (pause a batch job, rotate logs, expand a PVC on a StorageClass that supports it), then verifies the effect and rolls back if needed | High confidence, action in the allow-list, no rule forbids it, RBAC and target environment checked, approved by the on-call |
 | Never automatic | Deleting data, dropping collections, compact / resync, deleting PVCs, restarting primaries | Always a human decision (`dangerous_actions` in YAML) |
 
@@ -195,8 +213,8 @@ knows whether it helped or made things worse.
 ## Roadmap
 
 1. **Input:** Alertmanager webhook receiver; read-only PromQL so trends come from real data (`predict_linear`, `offset 1w`), not a single growth rate.
-2. **Context:** connectors for releases / CI-CD and git, Jira change tickets, Slack incident channels, read-only `kubectl`, with every tool call shown in the trace.
-3. **Output level 1:** prepared commands, PRs and change requests with dry-run and rollback.
+2. **Context:** replace the synthetic change feed with real connectors (GitHub/GitLab, Argo CD, Jira, Slack), plus read-only `kubectl`, with every tool call shown in the trace.
+3. **Output level 1:** besides prepared commands (done), open a PR or Jira change request with the plan attached.
 4. **Output level 2:** one-click fixes for an allow-list of reversible actions, with RBAC, approval, verification and an audit log.
 5. Feedback loop: turn repeated bad outcomes into proposed YAML constraints for expert review; semantic similarity; shared storage.
 6. More domains: PostgreSQL WAL, Kafka retention, memory/CPU saturation, 5xx (where the "don't scale into a cascade" rule matters most). Local inference via Ollama.

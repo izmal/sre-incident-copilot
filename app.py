@@ -8,6 +8,7 @@ from pathlib import Path
 import streamlit as st
 
 from src import feedback
+from src.remediation import prepare_fix
 from src.expert_engine import load_expertise
 from src.output_validator import unapproved_dangerous_actions
 from src.pipeline import Result, prepare_expert, run_baseline, run_expert
@@ -28,6 +29,8 @@ with st.sidebar:
     choice = st.selectbox("Demo scenario", titles, index=1)
     model = st.selectbox("Model (Gemini API)", MODELS)
     compare = st.toggle("Compare with plain Gemma (baseline)", value=True)
+    use_changes = st.toggle("Use change feed (git, CI/CD, Jira, Slack)", value=True,
+                            help="Synthetic feed in context/changes_feed.json, correlated with the alert by host / service / namespace.")
     use_history = st.toggle("Use team incident history (feedback loop)", value=True,
                             help="Similar past incidents and their outcomes are added to the prompt; actions that made things worse before always need approval.")
     use_cache = st.toggle("Replay recorded answers (offline / quota fallback)", value=False,
@@ -62,6 +65,48 @@ def render_risk(res: Result):
         st.warning(w)
 
 
+def render_fix(prep):
+    with st.container(border=True):
+        st.markdown(f"**🛠 Prepared fix:** {prep.action}")
+        if prep.error:
+            st.error(f"Could not prepare: {prep.error}")
+            return
+        r = prep.remediation
+        if prep.status == "needs_human_decision":
+            st.error("⛔ Needs a human decision. This will never be a one-click fix.")
+        elif prep.allowlist:
+            st.success(f"Allow-listed (`{prep.allowlist['id']}`, reversible: {prep.allowlist['reversible']}): "
+                       "candidate for a future one-click fix (level 2).")
+        else:
+            st.info("Not allow-listed: prepared for manual review only.")
+        for n in prep.guard_notes:
+            st.warning(n)
+        st.caption(f"{r.summary}  ·  confidence: {r.confidence}  ·  Nothing was executed. Review, then run yourself.")
+        if r.preconditions:
+            st.markdown("**Preconditions**\n" + "\n".join(f"- {p}" for p in r.preconditions))
+        for title, items in (("1. Dry-run / preview", r.dry_run), ("2. Change", r.commands), ("4. Rollback", r.rollback)):
+            if title.startswith("4") and r.verify:
+                st.markdown("**3. Verify**")
+                for c in r.verify:
+                    st.code(c.command, language="bash")
+                    if c.expected:
+                        st.caption(f"expected: {c.expected}")
+            if items:
+                st.markdown(f"**{title}**")
+                for c in items:
+                    st.code(c.command, language="bash")
+                    if c.explain:
+                        st.caption(c.explain)
+        if r.what_could_get_worse:
+            st.markdown(f"**What could get worse:** {r.what_could_get_worse}")
+        if r.blast_radius:
+            st.markdown(f"**Blast radius:** {r.blast_radius}")
+        if prep.allowlist:
+            st.caption(f"Allow-list rollback hint: {prep.allowlist['rollback_hint']}")
+        st.button("⚡ Apply fix (level 2: not available in the MVP)", disabled=True, key=f"apply-{id(prep)}",
+                  help="One-click execution needs integrations, RBAC and an approval flow. See README → Vision.")
+
+
 def render_report(res: Result, expert: bool):
     if res.error:
         st.error(f"LLM unavailable or invalid output: {res.error}")
@@ -80,10 +125,19 @@ def render_report(res: Result, expert: bool):
         for ce in crit:
             st.error(f"⚠️ Unsafe: '{ce['action']}' is a {ce['label']} proposed without human approval ({ce['rule_id']})")
 
+    if expert and res.changes:
+        st.markdown("**Recent changes found by connectors**")
+        for e in res.changes:
+            st.markdown(f"- `{e.source}` **{e.id}** · {e.hours_ago:g}h ago · {e.author}: {e.title}  \n  *{e.reason}*")
+
     st.markdown("**Immediate actions**")
-    for a in rep.immediate_actions:
+    for idx, a in enumerate(rep.immediate_actions):
         badge = "🔐 needs approval" if a.requires_approval else "✅ safe to do now"
         with st.expander(f"{a.action}  ·  {badge}"):
+            if expert and st.button("🛠 Prepare fix", key=f"fix-btn-{idx}", help="Level 1: commands, dry-run, verification and rollback. Nothing is executed."):
+                with st.spinner("Preparing commands, dry-run and rollback…"):
+                    st.session_state.setdefault("fixes", {})[idx] = prepare_fix(
+                        a, res.alert, res.risk, rep.applied_expert_rules, res.changes, res.meta.get("model"))
             for k in ("purpose", "conditions", "expected_effect", "risks", "verify"):
                 if getattr(a, k):
                     st.markdown(f"- **{k.replace('_', ' ')}:** {getattr(a, k)}")
@@ -91,6 +145,8 @@ def render_report(res: Result, expert: bool):
                 st.markdown(f"- **rules:** {', '.join(f'`{x}`' for x in a.rule_ids)}")
             if a.guard_note:
                 st.warning(a.guard_note)
+        if expert and idx in st.session_state.get("fixes", {}):
+            render_fix(st.session_state["fixes"][idx])
 
     st.markdown("**Missing context (what to check next)**")
     for m in rep.missing_context:
@@ -120,14 +176,15 @@ def render_report(res: Result, expert: bool):
 
 with tab_main:
     if go:
-        alert, risk, rules, _ = prepare_expert(raw)
+        alert, risk, rules, _, _ = prepare_expert(raw)
         with st.spinner("Asking Gemma 4… (expert mode ~20-35s)"):
             with ThreadPoolExecutor(2) as pool:
-                fe = pool.submit(run_expert, raw, model, use_cache, use_history and not use_cache)
+                fe = pool.submit(run_expert, raw, model, use_cache, use_history and not use_cache, use_changes and not use_cache)
                 fb = pool.submit(run_baseline, raw, model, use_cache) if compare else None
                 exp_res = fe.result()
                 base_res = fb.result() if fb else None
         st.session_state["last"] = (exp_res, base_res)
+        st.session_state["fixes"] = {}
     if "last" in st.session_state:
         exp_res, base_res = st.session_state["last"]
         st.subheader("Deterministic risk analysis (code, not LLM)")

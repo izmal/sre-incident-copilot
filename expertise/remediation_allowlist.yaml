@@ -1,0 +1,56 @@
+# Remediation allow-list (global.harm.001, levels of autonomy).
+# Actions that are reversible or low-risk enough to become one-click fixes (level 2) once integrations,
+# RBAC and approval flow exist. Today the Copilot only PREPARES them (level 1): commands, dry-run,
+# verification and rollback for a human to run. Anything not listed here stays "prepare only";
+# anything matching a rule's dangerous_actions is never automatic.
+version: 1
+
+actions:
+  - id: fix.pause_writer
+    title: Pause or throttle a batch / backfill / import job
+    match: '\b(pause|suspend|throttle|stop|halt)\w*\b.{0,50}\b(job|backfill|import|cron\w*|writer|batch|migration)'
+    reversible: true
+    rollback_hint: Resume the job (e.g. kubectl patch cronjob <name> -p '{"spec":{"suspend":false}}' or scale the worker back).
+    why_allowed: Reduces load instead of adding capacity; fully reversible.
+
+  - id: fix.rotate_logs
+    title: Rotate logs (logrotate / MongoDB logRotate)
+    match: 'rotat\w*.{0,30}log|logRotate|logrotate|copytruncate'
+    reversible: true
+    rollback_hint: Nothing to roll back; rotated files are kept (compressed) until retention.
+    why_allowed: Frees space held by logs without deleting live files.
+
+  - id: fix.journal_vacuum
+    title: Vacuum systemd journal to a size limit
+    match: 'journalctl\s+--vacuum|vacuum.{0,20}journal'
+    reversible: false
+    rollback_hint: Old journal entries are removed; export them first if needed for an RCA.
+    why_allowed: Only touches historical system logs, bounded by size.
+
+  - id: fix.expand_pvc
+    title: Expand a PVC (StorageClass allows expansion)
+    match: '(expan|resiz|increas|grow)\w*.{0,40}(pvc|persistent\s*volume|volume\s*claim)|(pvc|persistent\s*volume).{0,40}(expan|resiz)'
+    reversible: partial
+    rollback_hint: Size cannot be shrunk back; rollback = stop further growth. Cost increases.
+    why_allowed: Online on CSI drivers that support it; no data is touched.
+
+  - id: fix.expand_volume
+    title: Expand a cloud disk / filesystem online
+    match: '(expan|resiz|increas|grow|extend)\w*.{0,40}(volume|disk|filesystem|ebs|storage)'
+    reversible: partial
+    rollback_hint: Size cannot be shrunk back; rollback = stop further growth. Cost increases.
+    why_allowed: Online resize on most clouds; no data is touched. Must still find the growth source.
+
+  - id: fix.revert_change
+    title: Revert / roll back the change that caused the growth
+    match: '\b(revert|roll\s*back|rollback|rollout\s+undo|disable\s+(the\s+)?feature|feature\s*flag)\b'
+    reversible: true
+    rollback_hint: Re-deploy the reverted version.
+    why_allowed: Returns to the last known good state; check DB migrations first.
+
+  - id: fix.lower_log_level
+    title: Lower log level from debug
+    match: 'log[_ ]?level|debug\s+log'
+    reversible: true
+    rollback_hint: Set the previous log level back.
+    why_allowed: Config-only change, reduces write volume.

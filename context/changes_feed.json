@@ -1,0 +1,52 @@
+{
+  "_comment": "Synthetic change feed that stands in for git, CI/CD, Jira, Slack, Helm/Terraform and the change calendar. hours_ago is relative to the moment of analysis, so the demo always looks fresh.",
+  "events": [
+    {"id": "cd-8812", "source": "ci-cd", "hours_ago": 3.2, "targets": ["orders-service", "rs-orders"],
+     "title": "orders-service v2.31.0 deployed to prod", "author": "deploy-bot",
+     "details": "New feature: every order status change is written to MongoDB collection order_events (audit trail)."},
+    {"id": "git-4f2a9c1", "source": "git", "hours_ago": 3.5, "targets": ["orders-service", "rs-orders"],
+     "title": "feat(audit): add order_events collection", "author": "m.garcia",
+     "details": "Writes one document per status change (~4 KB). TODO: add TTL index later."},
+    {"id": "ORD-412", "source": "jira", "hours_ago": 26, "targets": ["orders-service"],
+     "title": "Enable audit trail for orders (compliance)", "author": "product",
+     "details": "Retention requirement: 90 days."},
+    {"id": "slack-mongo-ops-1", "source": "slack", "hours_ago": 5, "targets": ["rs-orders", "mongo-prod-03"],
+     "title": "#mongo-ops: starting backfill of order history into rs-orders", "author": "a.petrov",
+     "details": "Backfill job orders-history-backfill, expected to run ~10h."},
+
+    {"id": "cd-7710", "source": "ci-cd", "hours_ago": 3.0, "targets": ["payments-api", "api-node-07", "api-node-08"],
+     "title": "payments-api release 4.12 deployed", "author": "deploy-bot",
+     "details": "Rolled out to api-node-07..08."},
+    {"id": "git-91bd0e2", "source": "git", "hours_ago": 3.4, "targets": ["payments-api"],
+     "title": "chore: LOG_LEVEL=debug in prod values for PSP timeout investigation", "author": "j.smith",
+     "details": "Temporary, revert after investigation."},
+
+    {"id": "INFRA-233", "source": "jira", "hours_ago": 20, "targets": ["billing", "data-postgres-0", "postgres"],
+     "title": "Scale down billing Postgres standby to save cost", "author": "infra",
+     "details": "Standby removed; replication slot standby_1 not dropped."},
+    {"id": "helm-billing-58", "source": "helm", "hours_ago": 19.5, "targets": ["billing", "postgres"],
+     "title": "helm upgrade billing-postgres: replicas 2 -> 1", "author": "argocd",
+     "details": "Revision 58."},
+
+    {"id": "LOG-77", "source": "jira", "hours_ago": 30, "targets": ["logging", "data-loki-0", "loki"],
+     "title": "Increase Loki retention from 7d to 30d", "author": "observability",
+     "details": "Requested by security team. Storage impact not estimated."},
+
+    {"id": "ansible-web-19", "source": "terraform/ansible", "hours_ago": 40, "targets": ["web-03", "web"],
+     "title": "php.ini hardening: session.gc_probability=0", "author": "ops",
+     "details": "Session garbage collection moved to a cron job (cron not yet deployed)."},
+
+    {"id": "slack-batch-1", "source": "slack", "hours_ago": 30, "targets": ["batch-02"],
+     "title": "#batch: removed a 70 GB app log on batch-02 with rm to free space", "author": "k.lee",
+     "details": "Process batch-worker was not restarted."},
+
+    {"id": "net-552", "source": "change-calendar", "hours_ago": 2, "targets": ["dc-west", "core-switch"],
+     "title": "Planned network maintenance on dc-west core switches", "author": "netops",
+     "details": "Unrelated to storage; listed to show filtering."},
+    {"id": "mkt-bf-1", "source": "calendar", "hours_ago": 6, "targets": ["global"],
+     "title": "Marketing: early Black Friday email to 2M customers", "author": "marketing",
+     "details": "Expect 3-5x traffic and order volume for 24h."},
+    {"id": "cd-frontend-5", "source": "ci-cd", "hours_ago": 1, "targets": ["frontend"],
+     "title": "frontend v5.4.0 deployed", "author": "deploy-bot", "details": "UI only."}
+  ]
+}
