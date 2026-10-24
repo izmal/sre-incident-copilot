@@ -146,6 +146,7 @@ def main():
     ap.add_argument("--model", default=None)
     ap.add_argument("--only", default=None, help="comma-separated case ids")
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--tag", default=None, help="write results-<tag>.json / summary-<tag>.md instead of the main files")
     args = ap.parse_args()
     from src.llm_provider import DEFAULT_MODEL
     model = args.model or DEFAULT_MODEL
@@ -155,9 +156,10 @@ def main():
     with ThreadPoolExecutor(args.workers) as pool:
         rows = list(pool.map(lambda c: run_case(c, model, not args.no_cache), cases))
     OUT.mkdir(parents=True, exist_ok=True)
-    (OUT / "results.json").write_text(json.dumps(rows, indent=2, default=str))
+    suffix = f"-{args.tag}" if args.tag else ""
+    (OUT / f"results{suffix}.json").write_text(json.dumps(rows, indent=2, default=str))
     md = summarize(rows, model)
-    (OUT / "summary.md").write_text(md)
+    (OUT / f"summary{suffix}.md").write_text(md)
     print(md)
 
 
