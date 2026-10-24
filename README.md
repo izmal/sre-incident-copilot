@@ -70,25 +70,32 @@ Scope of the MVP: **storage pressure** on Linux filesystems, Kubernetes PVCs and
 
 ## 2. How to run
 
-Requires Python 3.12 and a free Gemini API key ([aistudio.google.com/apikey](https://aistudio.google.com/apikey)).
+Requires Python 3.12+ and a free Gemini API key ([aistudio.google.com/apikey](https://aistudio.google.com/apikey)).
 
 ```bash
 git clone https://github.com/izmal/sre-incident-copilot && cd sre-incident-copilot
-python3.12 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env   # put your GEMINI_API_KEY there
+python3 -m venv .venv && source .venv/bin/activate     # or: uv venv -p 3.12 .venv && source .venv/bin/activate
+pip install -r requirements.txt                          # or: uv pip install -r requirements.txt
+cp .env.example .env                                     # put your GEMINI_API_KEY there
 streamlit run app.py
 ```
 
-Open http://localhost:8501, pick a demo scenario (or paste your own alert) and press **Analyze**.
-First useful answer: 3 clicks, ~20-35 seconds.
+**First useful answer in about a minute:** open http://localhost:8501, choose **⚡ Quick assist**, keep the default
+MongoDB scenario and press **Analyze**. The incident ticket and Slack update arrive in ~10 s. Then switch to
+**🔬 Deep analysis** and press **Analyze** again for the full plan next to plain Gemma (~35 s). Inside an action, press
+**🛠 Prepare fix** to get the commands. You can also paste your own Alertmanager JSON or describe the alert in plain text.
 
-Reproduce the evaluation (22 Gemma calls; responses are cached in `evaluation/cache/`):
+**Check the claims without an API key** (the 22 Gemma responses behind the results are committed in `evaluation/cache/`):
 
 ```bash
-python -m evaluation.evaluate            # writes evaluation/results/summary.md and results.json
-pytest -q                                # deterministic parts, no API key needed
+pytest -q                                # 12 tests of the deterministic parts
+python -m evaluation.evaluate            # re-scores the recorded answers -> evaluation/results/summary.md
+python -m evaluation.evaluate --no-cache # with a key: fresh Gemma calls (LLM output varies run to run)
 ```
+
+Troubleshooting: `429 RESOURCE_EXHAUSTED` means the free-tier quota is exhausted. Wait a minute, or turn on
+**Replay recorded answers** in the sidebar to replay the evaluation answers for the built-in scenarios. If the API
+fails, the UI still shows the deterministic analysis and never invents a conclusion.
 
 ## 3. Expertise: what is built in and where it comes from
 
@@ -107,6 +114,7 @@ applied to every alert:
 |---|---|
 | [`global_principles.yaml`](expertise/global_principles.yaml) | The 5 workflow rules above, the urgency policy (TTE / headroom / inode / impact thresholds as config), "destructive ops are never quick fixes", "don't default to adding disk", "no invented numbers" |
 | [`mongodb_storage.yaml`](expertise/mongodb_storage.yaml) | Deleting docs doesn't free OS space (WiredTiger reuse), `compact` is not an emergency fix, primary vs secondary blast radius, leave the oplog alone, find the growth source, never touch dbPath |
+| [`remediation_allowlist.yaml`](expertise/remediation_allowlist.yaml) | Which fixes are reversible enough to become one-click later (pause a writer, rotate logs, expand a PVC, revert a change…), with rollback hints |
 | [`linux_storage.yaml`](expertise/linux_storage.yaml) | Forecast from the time series not the %, inode exhaustion is a different incident, deleted-but-open files, rotate don't delete logs, reserved blocks, never clean DB data dirs |
 | [`kubernetes_storage.yaml`](expertise/kubernetes_storage.yaml) | PVC expansion preconditions (StorageClass + CSI), StatefulSet volumeClaimTemplates, never delete a PVC to "recreate it bigger", look inside the workload |
 
