@@ -27,6 +27,7 @@ rules:
       secondary, one member at a time, after confirming replica set health.
     constraints:
       - compact must be requires_approval=true and never run on the primary during an incident.
+      - "Make-it-worse check: compact's extra I/O on an already full node can slow replication and push lag past the oplog window."
     dangerous_actions:
       - {label: "compact", pattern: '\bcompact\b'}
 
@@ -43,6 +44,7 @@ rules:
       - "rs.status(): member states, optimeDate, health"
       - "rs.printSecondaryReplicationInfo(): replication lag"
       - Check free disk on the OTHER members: they usually grow at the same rate.
+      - "Safest way to buy time: find and throttle/pause the noisy writer (batch import, migration, runaway job) instead of touching the database."
     constraints:
       - Do not resync or restart a member if the set would lose majority.
       - rs.stepDown() on the primary requires approval and a healthy, caught-up secondary.
@@ -73,7 +75,8 @@ rules:
     checks:
       - "db.stats() and per-collection collStats sorted by storageSize, totalIndexSize"
       - "db.collection.getIndexes() to confirm TTL indexes exist (expireAfterSeconds)"
-      - Correlate the growth start with deploys and write-op metrics (opcounters).
+      - Correlate the growth start with deploys, migrations, new jobs and write-op metrics (opcounters).
+      - Compare growth with the same time last week and with previous disk incidents on this replica set.
       - du -sh on dbPath subfolders, /var/log/mongodb and diagnostic.data
     constraints:
       - Log rotation via db.adminCommand({logRotate: 1}) is a safe way to reclaim log space.

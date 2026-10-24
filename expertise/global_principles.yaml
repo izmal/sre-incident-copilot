@@ -1,8 +1,14 @@
 # Global SRE principles and urgency policy.
 # Thresholds are configuration, not universal truths: tune them for your org.
-version: 1
+# global.impact/context/harm/history/learning rules: the author's own on-call workflow.
+version: 2
 
 principles:
+  - impact_first_is_anyone_suffering_now
+  - fix_fast_but_never_make_it_worse
+  - look_around_before_acting
+  - compare_with_trends_and_past_incidents
+  - close_the_loop_learn_from_outcomes
   - prioritize_service_availability
   - prefer_reversible_operations
   - separate_mitigation_from_root_cause
@@ -33,6 +39,85 @@ urgency:
   stale_metrics_minutes: 30
 
 rules:
+  - id: global.impact.001
+    title: "Impact first: is anyone suffering right now?"
+    applies_to: {components: [any], categories: [any]}
+    rationale: >
+      The first question for every alert is not "what is full" but "do we have to
+      run and put out a fire": are customers or the business affected right now,
+      external or internal (other teams, batch jobs, CI)? Real impact means
+      restore service first with the fastest SAFE fix, investigate later. No
+      impact and hours of runway means there is time to do it properly.
+    required_context: [user_impact]
+    checks:
+      - Error rate / latency SLO dashboards of the affected service and its consumers.
+      - Support tickets, status page, internal channels: is anyone complaining?
+      - Which services depend on this node / volume / database (blast radius)?
+    constraints:
+      - State explicitly whether impact is confirmed, absent or unknown; if unknown, the first immediate action is to find out.
+      - With confirmed impact, prefer the fastest reversible mitigation over a perfect fix.
+
+  - id: global.harm.001
+    title: "Fix fast, but check you will not make it worse"
+    applies_to: {components: [any], categories: [any]}
+    rationale: >
+      The obvious fix on the surface often makes the incident bigger. Example from
+      practice: a backend returns 500s and metrics show it lacks CPU/memory, so the
+      team scales it up. More instances push more load onto the database and other
+      dependencies, which degrade, and the failure cascades across systems. The
+      right move was rate limiting / load shedding. For storage the same trap:
+      online resize, compact or a resync add heavy I/O to a node that is already
+      struggling; restarting a pod to finish a PVC resize takes a replica out.
+    checks:
+      - For each mitigation ask "what does this do to dependencies and to the rest of the cluster?"
+      - Prefer actions that reduce load (rate limit, pause batch jobs, stop the noisy writer) over actions that add capacity or I/O.
+    constraints:
+      - "Every immediate action must say in `risks` what could get worse and how to roll it back."
+      - Do not propose scaling up or adding capacity as a reflex; first check whether it shifts the load to a weaker component.
+
+  - id: global.context.001
+    title: "Look around: releases, recent changes, external events"
+    applies_to: {components: [any], categories: [any]}
+    rationale: >
+      An alert rarely lives alone. Before acting, check what else is happening: a
+      release in progress (errors or growth may be an expected effect), a recent
+      change by anyone (developer, infra, network or DBA engineer, config or
+      feature-flag change), or an external event (marketing campaign, product
+      launch, partner integration going live, a provider incident). This context
+      is the most often missed and often explains the alert in one minute.
+    required_context: [recent_changes]
+    checks:
+      - Deploy / CI-CD history and change calendar for the last 24h, including infra (Terraform, Helm, network) changes.
+      - Feature-flag and config changes; announcements and planned launches.
+      - Other alerts firing at the same time on related systems (is this a symptom of something bigger?).
+    constraints:
+      - If a recent change correlates with the start of the problem, propose verifying it and, if confirmed, rolling it back as a mitigation candidate (with approval).
+
+  - id: global.history.001
+    title: Compare with trends and similar past incidents
+    applies_to: {components: [any], categories: [any]}
+    rationale: >
+      One number says little. Compare the current growth / load with its own
+      history (same hour last week, 7d / 30d trend) and with earlier incidents on a
+      similar load: what was done then, did it help, did it make things worse?
+    checks:
+      - "PromQL: compare with `offset 1w` and with deriv() over 7d to see if this growth is normal seasonality or an anomaly."
+      - Search previous incident reports / post-mortems for the same service, alert and load pattern.
+    constraints:
+      - If growth matches a normal seasonal pattern, say so and lower the alarm; if it is a new anomaly, say what changed.
+
+  - id: global.learning.001
+    title: "Close the loop: record the outcome of every incident"
+    applies_to: {components: [any], categories: [any]}
+    rationale: >
+      Expertise grows from outcomes. After the incident record which
+      recommendations were followed, whether they helped, and whether any made
+      things worse even if they looked fine at the time. Good decisions become
+      rules to repeat; bad outcomes become new constraints, so the assistant does
+      not repeat the mistake.
+    constraints:
+      - The incident_update should end with what will be verified next; the plan should include a follow-up to record the outcome (helped / no effect / made it worse) for the post-mortem.
+
   - id: global.safety.001
     title: Destructive operations are never immediate safe actions
     applies_to: {components: [any], categories: [any]}

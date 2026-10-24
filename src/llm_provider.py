@@ -57,6 +57,7 @@ def generate_json(system: str, user: str, model: str | None = None, temperature:
     cache_file = CACHE_DIR / f"{key}.json"
     if use_cache and cache_file.exists():
         cached = json.loads(cache_file.read_text())
+        cache_file.touch()  # mark as used, so stale entries can be pruned
         return parse_json(cached["raw_text"]), {**cached["meta"], "cached": True, "raw_text": cached["raw_text"]}
 
     client = _client()

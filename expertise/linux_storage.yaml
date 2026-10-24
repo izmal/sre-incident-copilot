@@ -13,6 +13,7 @@ rules:
     checks:
       - "PromQL: predict_linear(node_filesystem_avail_bytes{mountpoint=\"...\"}[6h], 4*3600) < 0"
       - Check if growth is steady, accelerating or a one-off spike.
+      - "Compare with last week: avail_bytes offset 1w; seasonal growth (month-end jobs, campaigns) is not an anomaly."
 
   - id: linux.storage.002
     title: Inode exhaustion is a different incident
@@ -38,6 +39,7 @@ rules:
     checks:
       - "lsof +L1 or lsof -nP | grep '(deleted)' to find held files and their PIDs"
       - "Compare df -h and du -xsh on the same mount"
+      - Before restarting the holder, check who depends on that process (impact of the restart vs impact of the full disk).
     constraints:
       - "Prefer truncating via /proc/<pid>/fd/<n> or a graceful reload (logrotate copytruncate / SIGHUP) over a restart; both need approval on prod."
     dangerous_actions:

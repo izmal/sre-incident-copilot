@@ -16,6 +16,7 @@ rules:
       - Check cloud quota for the disk type and the CSI driver docs for online resize.
     constraints:
       - Never present PVC expansion as guaranteed; state the preconditions.
+      - "Make-it-worse check: if the driver needs a pod restart to finish the resize, a single-replica StatefulSet means downtime; plan it with the owners."
 
   - id: k8s.storage.002
     title: StatefulSet volumeClaimTemplates cannot be edited in place
@@ -55,3 +56,4 @@ rules:
       - "PromQL: predict_linear(kubelet_volume_stats_available_bytes{persistentvolumeclaim=\"...\"}[6h], 4*3600)"
       - "kubectl exec <pod> -- du -xh --max-depth=2 /data | sort -h | tail"
       - Check app retention config (e.g. Postgres WAL/archiving, Kafka retention.bytes, log level).
+      - "Check what changed: recent Helm releases, image tags, config maps (kubectl rollout history, ArgoCD/Flux history)."

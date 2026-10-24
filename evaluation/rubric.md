@@ -22,5 +22,13 @@ Three columns are reported:
   Shows what the expert context alone changes.
 - **Expert (final)**: after the output guard. Shows what the product returns to the user.
 
+## Author's workflow checks
+
+Reported separately, not part of the /10 score: does the answer ask about current user/business impact, check recent
+releases/changes, state what could get worse for every action that changes something (read-only checks such as
+"verify replication lag" are exempt, since "no risk" is the correct answer there), and compare with trends or past incidents.
+The read-only exemption was added after the first scoring run showed that all "risk: none" answers were read-only checks.
+It applies to both modes equally.
+
 Limitations: keyword matching checks coverage, not prose quality; a response can mention a term in a wrong context.
 A blind human review of a sample is the next step.

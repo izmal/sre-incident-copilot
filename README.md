@@ -55,11 +55,20 @@ pytest -q                                # deterministic parts, no API key neede
 
 ## 3. Expertise: what is built in and where it comes from
 
-All expertise is explicit, versioned YAML in [`expertise/`](expertise), not hidden in a prompt:
+All expertise is explicit, versioned YAML in [`expertise/`](expertise), not hidden in a prompt.
+
+**The author's on-call workflow** (the part that separates an SRE from "disk is full → add disk") is encoded as global rules
+applied to every alert:
+
+1. **Impact first** (`global.impact.001`): is anyone suffering right now, customers or internal teams? Real impact → fastest *safe* fix first; no impact and hours of runway → do it properly.
+2. **Fix fast, but don't make it worse** (`global.harm.001`): the obvious fix often cascades. Example from practice: a backend throws 500s for lack of CPU, the team scales it up, the extra instances overload the database and every dependency goes down, when rate limiting was the right move. For storage: resize / compact / resync add I/O to a node that is already struggling.
+3. **Look around** (`global.context.001`): a release in progress (maybe the errors are expected), a recent change by any engineer (dev, infra, network, DBA), an external event (campaign, launch, provider incident). This is the most often missed context.
+4. **Trends and past incidents** (`global.history.001`): compare with last week and with earlier incidents under similar load: what was done, did it help?
+5. **Close the loop** (`global.learning.001`): record whether the recommendations helped or made things worse, so good decisions become rules and bad outcomes become constraints.
 
 | File | What it encodes |
 |---|---|
-| [`global_principles.yaml`](expertise/global_principles.yaml) | Urgency policy (TTE / headroom / inode thresholds as config), "destructive ops are never quick fixes", "don't default to adding disk", "no invented numbers" |
+| [`global_principles.yaml`](expertise/global_principles.yaml) | The 5 workflow rules above, the urgency policy (TTE / headroom / inode / impact thresholds as config), "destructive ops are never quick fixes", "don't default to adding disk", "no invented numbers" |
 | [`mongodb_storage.yaml`](expertise/mongodb_storage.yaml) | Deleting docs doesn't free OS space (WiredTiger reuse), `compact` is not an emergency fix, primary vs secondary blast radius, leave the oplog alone, find the growth source, never touch dbPath |
 | [`linux_storage.yaml`](expertise/linux_storage.yaml) | Forecast from the time series not the %, inode exhaustion is a different incident, deleted-but-open files, rotate don't delete logs, reserved blocks, never clean DB data dirs |
 | [`kubernetes_storage.yaml`](expertise/kubernetes_storage.yaml) | PVC expansion preconditions (StorageClass + CSI), StatefulSet volumeClaimTemplates, never delete a PVC to "recreate it bigger", look inside the workload |
@@ -111,9 +120,18 @@ What made the difference:
 - **Domain traps**: after "we deleted 50M docs and disk didn't shrink" the Copilot explains WiredTiger space reuse and
   checks `freeStorageSize`. The baseline rated it `high` and missed why.
 
+The author's workflow, measured separately (not part of the /10 score):
+
+| Check | Plain Gemma | Copilot |
+|---|---|---|
+| Asks whether users / business are affected right now | 3/11 | **11/11** |
+| Checks recent releases / changes / external events | 4/11 | **11/11** |
+| Says what could get worse for every action that changes something | 11/11 | 11/11 |
+| Compares with trend / last week / past incidents | 5/11 | **8/11** |
+
 Honest notes: on this set plain Gemma made **no** critical safety errors either (it also ignored the prompt injection),
 so the safety guard is a backstop here, not the measured win. The guard changed one answer (removed a rule id that did not apply).
-The expert answers are ~5s slower (~29s vs ~24s).
+The expert answers are ~10s slower (~34s vs ~24s).
 
 Full table: [`evaluation/results/summary.md`](evaluation/results/summary.md). Raw outputs: [`evaluation/results/results.json`](evaluation/results/results.json).
 
@@ -135,5 +153,7 @@ Full table: [`evaluation/results/summary.md`](evaluation/results/summary.md). Ra
 
 ## Roadmap
 
-Prometheus/Alertmanager webhook integration, PostgreSQL WAL / Kafka retention rules, read-only `kubectl`/PromQL tools
-with traces, an "expert capture" flow to turn post-mortems into new rules, local inference via Ollama.
+- **Feedback loop** (`global.learning.001` in code): after an incident the engineer marks each recommendation as helped / no effect / made it worse; outcomes are stored per alert type, similar past incidents are added to the prompt, and repeated bad outcomes are proposed as new constraints for review.
+- Prometheus/Alertmanager webhook integration and read-only PromQL / `kubectl` tools (real trends instead of a single growth rate, `offset 1w` comparisons), with traces.
+- More domains: PostgreSQL WAL, Kafka retention, memory/CPU saturation, 5xx (where the "don't scale into a cascade" rule matters most).
+- Local inference via Ollama.

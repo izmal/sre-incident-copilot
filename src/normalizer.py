@@ -116,6 +116,15 @@ def extract_from_text(text: str) -> dict[str, Any]:
             found[key] = float(m.group(1)) * _unit(m.group(2))
         else:
             found[key] = conv(m.group(1))
+    change_re = re.compile(r"\b(release|deploy\w*|rolled out|rollout|went out|migration|campaign|launch\w*|config change|upgrade\w*)\b", re.I)
+    for sentence in re.split(r"(?<=[.!?])\s+|\n", text):
+        if change_re.search(sentence):
+            found["recent_changes"] = sentence.strip()
+            break
+    if re.search(r"\bno (user|customer|client|business) impact|\b(users|customers|clients) (are )?not (affected|impacted)", text, re.I):
+        found["user_impact"] = False
+    elif re.search(r"\b(users|customers|clients) (are )?(affected|impacted|complaining|see(ing)? errors)|\bcustomer[- ]facing (errors|outage)", text, re.I):
+        found["user_impact"] = True
     role = re.search(r"\b(primary|secondary)\b", text, re.I)
     if role:
         found["replica_set_role"] = role.group(1).lower()

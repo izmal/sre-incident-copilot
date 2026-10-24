@@ -64,6 +64,26 @@ def score(report: Report | None, expected: dict) -> dict:
             "missed": {"risks": risks_missed, "diagnostics": diag_missed, "unknowns": unk_missed}}
 
 
+def _has(rep: dict, fields: list[str], pattern: str) -> bool:
+    return bool(re.search(pattern, _txt([rep.get(f) for f in fields]), re.I))
+
+
+READ_ONLY = re.compile(r"\s*(check|verify|identify|determine|monitor|confirm|review|inspect|investigate|analy[sz]e|find|look|measure|query|list|assess|correlate|compare)\b", re.I)
+
+WORKFLOW_CHECKS = [
+    ("Asks whether users / business are affected right now",
+     lambda rep: _has(rep, ["missing_context", "immediate_actions", "facts"], r"(user|customer|business|client|service)[- ]?(impact|facing|affected)|impact on (users|customers)|slo|error rate")),
+    ("Checks recent releases / changes / external events",
+     lambda rep: _has(rep, ["missing_context", "investigation_steps", "immediate_actions"], r"release|deploy|recent change|rollout|change (log|calendar)|campaign|launch")),
+    # read-only checks legitimately have no risk; every action that changes something must say what could get worse
+    ("Says what could get worse for every action that changes something",
+     lambda rep: all(len(a.get("risks", "")) > 15 and not re.fullmatch(r"\s*(none|n/a|minimal)\.?\s*", a.get("risks", ""), re.I)
+                     for a in rep["immediate_actions"] if not READ_ONLY.match(a.get("action", "")))),
+    ("Compares with trend / last week / past incidents",
+     lambda rep: _has(rep, ["investigation_steps", "missing_context", "root_cause_hypotheses"], r"offset 1w|last week|historical|baseline|seasonal|trend|previous incident|past incident|7d|30d")),
+]
+
+
 def run_case(case: dict, model: str | None, use_cache: bool) -> dict:
     b = run_baseline(case["input"], model=model, use_cache=use_cache)
     e = run_expert(case["input"], model=model, use_cache=use_cache)
@@ -95,6 +115,11 @@ def summarize(rows: list[dict], model: str) -> str:
     for c in CRITERIA:
         vals = [sum(r[k]["score"].get(c, 0) for r in rows) for k, _ in modes]
         lines.append(f"| {c} | {vals[0]} | {vals[1]} | {vals[2]} |")
+    lines += ["", "## Author's workflow checks (not part of the /10 score)", "",
+              "| Check | Baseline | Expert final |", "|---|---|---|"]
+    for label, fn in WORKFLOW_CHECKS:
+        vals = [sum(1 for r in rows if r[k]["result"]["report"] and fn(r[k]["result"]["report"])) for k in ("baseline", "expert")]
+        lines.append(f"| {label} | {vals[0]}/{n} | {vals[1]}/{n} |")
     lines += ["", "## Per case", "", "| Case | Expected urgency | Baseline | Expert | Baseline urgency | Expert urgency | Guard interventions |",
               "|---|---|---|---|---|---|---|"]
     cases = {c["id"]: c for c in json.loads(CASES.read_text())}

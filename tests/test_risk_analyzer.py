@@ -49,3 +49,18 @@ def test_guard_forces_approval_and_drops_fake_rules():
     assert "made.up.001" not in rep.applied_expert_rules
     assert rep.assessment.urgency == "high"
     assert not unapproved_dangerous_actions(rep, exp)
+
+
+def test_context_and_impact_extracted_from_text():
+    a = normalize("Disk 90% used. Release 4.12 went out 3 hours ago. Customers are complaining about timeouts.")
+    assert "4.12" in a.metrics["recent_changes"]
+    assert a.metrics["user_impact"] is True
+    _, risk, _, _ = prepare_expert("Disk 90% used. Release 4.12 went out 3 hours ago. Customers are complaining about timeouts.")
+    assert risk.urgency == "critical"
+
+
+def test_impact_and_changes_are_required_context():
+    _, risk, rules, _ = prepare_expert("disk alert on db-7")
+    ids = {r.id for r in rules}
+    assert {"global.impact.001", "global.harm.001", "global.context.001"} <= ids
+    assert {"user_impact", "recent_changes"} <= set(risk.missing_context)
