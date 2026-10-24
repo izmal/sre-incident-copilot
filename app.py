@@ -8,10 +8,11 @@ from pathlib import Path
 import streamlit as st
 
 from src import feedback
+from src.quick import collected_data, run_quick, ticket_markdown
 from src.remediation import prepare_fix
 from src.expert_engine import load_expertise
 from src.output_validator import unapproved_dangerous_actions
-from src.pipeline import Result, prepare_expert, run_baseline, run_expert
+from src.pipeline import Result, run_baseline, run_expert
 
 ROOT = Path(__file__).parent
 CASES = json.loads((ROOT / "evaluation" / "cases.json").read_text())
@@ -24,6 +25,10 @@ st.caption("Storage-pressure alert triage for on-call engineers: deterministic r
            "Decision support only: it never executes anything.")
 
 with st.sidebar:
+    mode = st.radio("Mode", ["⚡ Quick assist", "🔬 Deep analysis"], index=1,
+                    help="Quick assist: collect the data and draft the incident ticket + Slack update in ~10s. "
+                         "Deep analysis: full expert plan, change correlation, history, comparison with plain Gemma, prepared fixes.")
+    quick_mode = mode.startswith("⚡")
     st.header("Input")
     titles = ["✍️ Paste your own alert"] + [c["title"] for c in CASES]
     choice = st.selectbox("Demo scenario", titles, index=1)
@@ -174,9 +179,42 @@ def render_report(res: Result, expert: bool):
     st.caption(f"{res.meta.get('model')} · {res.meta.get('latency_s')}s" + (" · ♻️ replayed recorded answer" if res.meta.get("cached") else ""))
 
 
+def render_quick(q):
+    st.subheader("⚡ Quick assist: ticket drafted from collected data")
+    c = st.columns(4)
+    c[0].metric("Priority", q.priority)
+    c[1].metric("Urgency (computed)", f"{URGENCY_COLOR.get(q.risk.urgency, '')} {q.risk.urgency}")
+    c[2].metric("Time to exhaustion", f"{q.risk.time_to_exhaustion_hours} h" if q.risk.time_to_exhaustion_hours is not None else "unknown")
+    c[3].metric("Changes found", len([e for e in q.changes if "global" not in e.targets]))
+    with st.expander("Collected data (code, instant)"):
+        st.json(collected_data(q))
+    if q.error:
+        st.error(f"Could not draft the ticket: {q.error}. The collected data above is still valid.")
+        return
+    md = ticket_markdown(q)
+    with st.container(border=True):
+        st.markdown(md)
+    d1, d2 = st.columns(2)
+    d1.download_button("⬇️ Download ticket (.md)", md, file_name=f"incident-{q.priority[:2]}.md", mime="text/markdown")
+    with d2.popover("📋 Copy ticket markdown"):
+        st.code(md, language="markdown")
+    st.markdown("**Slack update**")
+    st.code(q.draft.slack_update, language=None)
+    st.caption(f"{q.meta.get('model')} · {q.meta.get('latency_s')}s · nothing was posted anywhere")
+    with st.expander("Agent trace"):
+        for t in q.trace:
+            st.markdown(f"- **{t['step']}** ({t['ms']} ms): {t.get('detail', '')}")
+
+
 with tab_main:
-    if go:
-        alert, risk, rules, _, _ = prepare_expert(raw)
+    if go and quick_mode:
+        with st.spinner("Collecting data and drafting the ticket… (~10s)"):
+            st.session_state["quick"] = run_quick(raw, model)
+        st.session_state.pop("last", None)
+    if quick_mode and "quick" in st.session_state:
+        render_quick(st.session_state["quick"])
+    if go and not quick_mode:
+        st.session_state.pop("quick", None)
         with st.spinner("Asking Gemma 4… (expert mode ~20-35s)"):
             with ThreadPoolExecutor(2) as pool:
                 fe = pool.submit(run_expert, raw, model, use_cache, use_history and not use_cache, use_changes and not use_cache)
@@ -185,7 +223,7 @@ with tab_main:
                 base_res = fb.result() if fb else None
         st.session_state["last"] = (exp_res, base_res)
         st.session_state["fixes"] = {}
-    if "last" in st.session_state:
+    if not quick_mode and "last" in st.session_state:
         exp_res, base_res = st.session_state["last"]
         st.subheader("Deterministic risk analysis (code, not LLM)")
         render_risk(exp_res)
@@ -223,7 +261,7 @@ with tab_main:
         with st.expander("Raw JSON"):
             st.json({"expert": exp_res.report.model_dump() if exp_res.report else exp_res.error,
                      "baseline": base_res.report.model_dump() if base_res and base_res.report else None})
-    else:
+    elif not (quick_mode and "quick" in st.session_state):
         st.info("Pick a scenario or paste an alert, then press **Analyze**.")
 
 with tab_rules:

@@ -14,6 +14,15 @@ Built at **Hacktoberfest Hack Day Barcelona 2026** · theme *Expertise → AI* �
 For SREs, DevOps / platform engineers and on-call people who get paged with
 `NodeFilesystemAlmostOutOfSpace`, `KubePersistentVolumeFillingUp` or `MongoDBDiskSpaceLow` at 3am.
 
+**Two modes:**
+
+| | ⚡ Quick assist | 🔬 Deep analysis |
+|---|---|---|
+| For | The on-call who already knows what to do and wants the routine gone | Unclear or risky incidents, less familiar systems |
+| Does | Collects the data in code (metrics, computed priority, recent changes, similar incidents) and drafts the **incident ticket + Slack update** with up to 3 expert hints | Full plan: risk, missing context, immediate actions vs root cause, dangerous operations, change correlation, history, side-by-side with plain Gemma, 🛠 Prepare fix |
+| Time | ~10 s, one short Gemma call | ~35 s |
+| Output | Ticket markdown (download / copy), Slack message. Nothing is posted | Action plan + prepared commands. Nothing is executed |
+
 A plain LLM explains the alert. An experienced SRE asks different questions: *how many hours of runway do we have?
 Is this the primary? Will deleting data even free disk? Can this StorageClass expand at all?* The Copilot packages
 those questions and the hard-learned "never do this" rules into a pipeline around Gemma 4:
@@ -30,6 +39,7 @@ Alert JSON / text
                         actions and actions that made things worse before forced to "needs approval"
   → UI                  plan, missing context, trace, side-by-side with plain Gemma,            app.py
                         "close the loop" form that records the outcome
+  → Quick assist        alternative mode: ticket + Slack update from collected data in ~10s    src/quick.py
   → Prepare fix         level 1: commands, dry-run, verify, rollback for one action;          src/remediation.py
                         allow-list + guard decide the status. Nothing is executed.
 ```
@@ -210,11 +220,25 @@ Incident history (feedback loop)  deterministic urgency, confidence score       
 Every executed action is logged and its outcome feeds back into the incident history, so the next recommendation
 knows whether it helped or made things worse.
 
+**Shared incident knowledge.** One team's history is small. The next step is to share resolved incidents and the
+conclusions drawn from them across teams and companies that use the Copilot, so everyone handles incidents faster:
+
+- **Today, via open source:** expert rules, the remediation allow-list and seed incidents are plain YAML/JSONL in this
+  repo. Anyone can contribute a rule or an anonymized incident with its outcome through a pull request, and the
+  evaluation (`python -m evaluation.evaluate`) shows whether the change improves results.
+- **Next, a community registry:** opt-in sharing of anonymized incident records (component, alert, metrics shape,
+  actions taken, outcome, lesson), with hosts, names, secrets and customer data stripped on the client before upload.
+  Outcomes reported by many teams ("compact during disk pressure made it worse 7 times out of 9") become candidate
+  rules, which experts review before they enter a versioned rule pack.
+- **Trust:** every shared rule keeps its provenance and a track record (how often it helped or hurt). Teams choose
+  which packs to trust, and local rules always win.
+
 ## Roadmap
 
 1. **Input:** Alertmanager webhook receiver; read-only PromQL so trends come from real data (`predict_linear`, `offset 1w`), not a single growth rate.
 2. **Context:** replace the synthetic change feed with real connectors (GitHub/GitLab, Argo CD, Jira, Slack), plus read-only `kubectl`, with every tool call shown in the trace.
 3. **Output level 1:** besides prepared commands (done), open a PR or Jira change request with the plan attached.
 4. **Output level 2:** one-click fixes for an allow-list of reversible actions, with RBAC, approval, verification and an audit log.
-5. Feedback loop: turn repeated bad outcomes into proposed YAML constraints for expert review; semantic similarity; shared storage.
-6. More domains: PostgreSQL WAL, Kafka retention, memory/CPU saturation, 5xx (where the "don't scale into a cascade" rule matters most). Local inference via Ollama.
+5. Shared knowledge: anonymizer + opt-in community registry of incident outcomes and reviewed rule packs (see Vision).
+6. Feedback loop: turn repeated bad outcomes into proposed YAML constraints for expert review; semantic similarity; shared storage.
+7. More domains: PostgreSQL WAL, Kafka retention, memory/CPU saturation, 5xx (where the "don't scale into a cascade" rule matters most). Local inference via Ollama.

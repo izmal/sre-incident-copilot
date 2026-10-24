@@ -97,3 +97,13 @@ def test_prepared_fix_guard_blocks_dangerous_commands():
                        remediation=Remediation(commands=[Cmd(command="kubectl delete pvc data-postgres-0")],
                                                rollback=[Cmd(command="restore from backup")])))
     assert p.status == "needs_human_decision" and p.allowlist is None
+
+
+def test_quick_ticket_markdown_uses_computed_priority():
+    from src.quick import PRIORITY, QuickResult, TicketDraft, ticket_markdown
+    alert, risk, _, _, events = prepare_expert({"labels": {"alertname": "MongoDBDiskSpaceLow", "instance": "mongo-prod-03:9216"},
+                                               "observed_metrics": {"size": "500GiB", "available": "40GiB", "growth_rate": "5GiB/h"}}, use_context=True)
+    q = QuickResult(alert=alert, risk=risk, priority=PRIORITY[risk.urgency], changes=events,
+                    draft=TicketDraft(title="Disk filling on mongo-prod-03", next_steps=[{"step": "Pause backfill"}]))
+    md = ticket_markdown(q)
+    assert md.startswith("# [P2]") and "8.0 h" in md and "slack-mongo-ops-1" in md
