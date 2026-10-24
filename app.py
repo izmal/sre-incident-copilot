@@ -17,7 +17,9 @@ from src.pipeline import Result, run_baseline, run_expert
 ROOT = Path(__file__).parent
 CASES = json.loads((ROOT / "evaluation" / "cases.json").read_text())
 URGENCY_COLOR = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🟢", "unknown": "⚪"}
-MODELS = ["gemma-4-26b-a4b-it", "gemma-4-31b-it"]
+from src.llm_provider import OLLAMA_MODEL
+
+MODELS = ["gemma-4-26b-a4b-it", "gemma-4-31b-it", f"ollama:{OLLAMA_MODEL}"]
 
 st.set_page_config(page_title="SRE Incident Copilot", page_icon="🧯", layout="wide")
 st.title("🧯 SRE Incident Copilot")
@@ -32,7 +34,8 @@ with st.sidebar:
     st.header("Input")
     titles = ["✍️ Paste your own alert"] + [c["title"] for c in CASES]
     choice = st.selectbox("Demo scenario", titles, index=1)
-    model = st.selectbox("Model (Gemini API)", MODELS)
+    model = st.selectbox("Model", MODELS, help="gemma-4-* run via the Gemini API (GEMINI_API_KEY). "
+                         "ollama:* runs Gemma locally via Ollama: no key, data stays on this machine, slower (~40s on a laptop).")
     compare = st.toggle("Compare with plain Gemma (baseline)", value=True)
     use_changes = st.toggle("Use change feed (git, CI/CD, Jira, Slack)", value=True,
                             help="Synthetic feed in context/changes_feed.json, correlated with the alert by host / service / namespace.")

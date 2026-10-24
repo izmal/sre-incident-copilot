@@ -1,4 +1,6 @@
-"""Gemma 4 via the Gemini API. The only place in the code where the model is called."""
+"""Gemma 4 via the Gemini API, or locally via Ollama. The only place in the code where the model is called.
+
+model "gemma-4-26b-a4b-it" -> Gemini API (GEMINI_API_KEY); model "ollama:gemma4:e4b" -> local Ollama (no key, offline)."""
 from __future__ import annotations
 
 import hashlib
@@ -6,6 +8,8 @@ import json
 import os
 import re
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -13,6 +17,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DEFAULT_MODEL = os.getenv("GEMMA_MODEL", "gemma-4-26b-a4b-it")
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e4b")
 CACHE_DIR = Path(__file__).resolve().parent.parent / "evaluation" / "cache"
 
 
@@ -60,6 +66,9 @@ def generate_json(system: str, user: str, model: str | None = None, temperature:
         cache_file.touch()  # mark as used, so stale entries can be pruned
         return parse_json(cached["raw_text"]), {**cached["meta"], "cached": True, "raw_text": cached["raw_text"]}
 
+    if model.startswith("ollama:"):
+        return _ollama(system, user, model, temperature, use_cache, cache_file, retries)
+
     client = _client()
     config = types.GenerateContentConfig(
         system_instruction=system,
@@ -90,3 +99,32 @@ def generate_json(system: str, user: str, model: str | None = None, temperature:
             else:
                 time.sleep(1.5)
     raise LLMError(f"Gemma call failed after {retries + 1} attempts: {str(last_err)[:300]}")
+
+
+def _ollama(system: str, user: str, model: str, temperature: float, use_cache: bool, cache_file: Path,
+            retries: int) -> tuple[dict, dict]:
+    """Local Gemma via Ollama. No structured-output mode for gemma4 in Ollama, so JSON is parsed from the text."""
+    body = {"model": model.removeprefix("ollama:"), "stream": False, "think": False,
+            "options": {"temperature": temperature, "num_ctx": 8192, "num_predict": 3000},
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+    req = urllib.request.Request(f"{OLLAMA_HOST}/api/chat", json.dumps(body).encode(), {"Content-Type": "application/json"})
+    last_err: Exception | None = None
+    for attempt in range(retries + 1):
+        t0 = time.time()
+        try:
+            with urllib.request.urlopen(req, timeout=600) as r:
+                raw = json.load(r)["message"]["content"]
+            data = parse_json(raw)
+            meta = {"model": model, "latency_s": round(time.time() - t0, 2), "cached": False, "attempt": attempt + 1}
+            if use_cache:
+                CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                cache_file.write_text(json.dumps({"raw_text": raw, "meta": meta}))
+            return data, {**meta, "raw_text": raw}
+        except urllib.error.URLError as e:
+            if isinstance(getattr(e, "reason", None), ConnectionRefusedError) or "refused" in str(e).lower():
+                raise LLMError(f"Ollama is not running at {OLLAMA_HOST}. Start it with `ollama serve` "
+                               f"and pull the model: `ollama pull {model.removeprefix('ollama:')}`")
+            last_err = e
+        except LLMError as e:
+            last_err = e
+    raise LLMError(f"Local model call failed after {retries + 1} attempts: {str(last_err)[:300]}")

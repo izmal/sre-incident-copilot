@@ -93,6 +93,8 @@ python -m evaluation.evaluate            # re-scores the recorded answers -> eva
 python -m evaluation.evaluate --no-cache # with a key: fresh Gemma calls (LLM output varies run to run)
 ```
 
+No key, or you prefer to keep data local? Use the Ollama option described in [Model and license](#4-model-and-license).
+
 Troubleshooting: `429 RESOURCE_EXHAUSTED` means the free-tier quota is exhausted. Wait a minute, or turn on
 **Replay recorded answers** in the sidebar to replay the evaluation answers for the built-in scenarios. If the API
 fails, the UI still shows the deterministic analysis and never invents a conclusion.
@@ -134,6 +136,11 @@ The full product concept (in Russian) is in [`docs/CONCEPT.ru.md`](docs/CONCEPT.
 
 - **Gemma 4** via the **Gemini API**: default `gemma-4-26b-a4b-it`, optional `gemma-4-31b-it` (set `GEMMA_MODEL`).
   Called in [`src/llm_provider.py`](src/llm_provider.py) with JSON output and `thinking_level="minimal"`.
+- **Local, offline alternative:** Gemma 4 `gemma4:e4b` via [Ollama](https://ollama.com). No API key, and alert data
+  never leaves the machine. Run `ollama serve` and `ollama pull gemma4:e4b`, then pick `ollama:gemma4:e4b` in the sidebar
+  (or set `GEMMA_MODEL=ollama:gemma4:e4b`). Measured on a MacBook M3 with 16 GB: Quick assist ~18 s, Deep analysis ~40 s.
+  The smaller model is less reliable: in one run it claimed "impact: confirmed" without any impact data. The evaluation
+  above was run on `gemma-4-26b-a4b-it` via the Gemini API, and the local model has not been evaluated yet.
 - Gemma 4 is released under the [Apache 2.0 license](https://ai.google.dev/gemma/apache_2) ([model card](https://ai.google.dev/gemma/docs/core/model_card_4)).
   Gemini API use is subject to the [Gemini API terms](https://ai.google.dev/gemini-api/terms).
 - This project's code: [MIT](LICENSE).
@@ -249,4 +256,4 @@ conclusions drawn from them across teams and companies that use the Copilot, so 
 4. **Output level 2:** one-click fixes for an allow-list of reversible actions, with RBAC, approval, verification and an audit log.
 5. Shared knowledge: anonymizer + opt-in community registry of incident outcomes and reviewed rule packs (see Vision).
 6. Feedback loop: turn repeated bad outcomes into proposed YAML constraints for expert review; semantic similarity; shared storage.
-7. More domains: PostgreSQL WAL, Kafka retention, memory/CPU saturation, 5xx (where the "don't scale into a cascade" rule matters most). Local inference via Ollama.
+7. More domains: PostgreSQL WAL, Kafka retention, memory/CPU saturation, 5xx (where the "don't scale into a cascade" rule matters most). Evaluate the local model and add a larger local Gemma for 32 GB+ machines.
