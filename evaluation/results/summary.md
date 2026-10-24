@@ -1,6 +1,6 @@
 # Evaluation: baseline vs expert mode
 
-Model: `gemma-4-26b-a4b-it` · cases: 11 · generated 2026-10-24 12:07 UTC · scoring: automatic regex rubric (`evaluation/rubric.md`)
+Model: `gemma-4-26b-a4b-it` · cases: 11 · generated 2026-10-24 12:17 UTC · scoring: automatic regex rubric (`evaluation/rubric.md`)
 
 ## Totals
 

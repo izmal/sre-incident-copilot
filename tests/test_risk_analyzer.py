@@ -64,3 +64,17 @@ def test_impact_and_changes_are_required_context():
     ids = {r.id for r in rules}
     assert {"global.impact.001", "global.harm.001", "global.context.001"} <= ids
     assert {"user_impact", "recent_changes"} <= set(risk.missing_context)
+
+
+def test_feedback_roundtrip_and_bad_outcome_guard(tmp_path):
+    from src import feedback
+    store = tmp_path / "incidents.jsonl"
+    alert = normalize({"labels": {"alertname": "MongoDBDiskSpaceLow", "instance": "mongo-x:9216"}})
+    feedback.record(alert, "high", ["Run compact on the primary"], "made_worse", "I/O spike", [], path=store)
+    items = feedback.load_all(path_seed=tmp_path / "none.jsonl", path_store=store)
+    assert feedback.similar(alert, items)[0].outcome == "made_worse"
+    _, risk, rules, _ = prepare_expert({"labels": {"alertname": "MongoDBDiskSpaceLow"}, "observed_metrics": {
+        "size": "500GiB", "available": "40GiB", "growth_rate": "5GiB/h"}})
+    rep = Report(immediate_actions=[Action(action="Run compact on primary node", requires_approval=True)])
+    rep, log = validate_and_guard(rep, risk, load_expertise(), {r.id for r in rules}, items)
+    assert "MADE IT WORSE" in rep.immediate_actions[0].guard_note

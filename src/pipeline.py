@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from . import llm_provider
+from . import feedback, llm_provider
 from .expert_engine import load_expertise, required_context
 from .normalizer import normalize
 from .output_validator import validate_and_guard
@@ -45,6 +45,7 @@ class Result:
     risk: RiskAnalysis | None = None
     rule_ids: list[str] = field(default_factory=list)
     guard_log: list[str] = field(default_factory=list)
+    past_incidents: list = field(default_factory=list)
     trace: list[dict] = field(default_factory=list)
     meta: dict = field(default_factory=dict)
     error: str | None = None
@@ -99,7 +100,7 @@ def prepare_expert(raw: str | dict) -> tuple[NormalizedAlert, RiskAnalysis, list
     return alert, risk, rules, trace
 
 
-def build_expert_prompt(alert: NormalizedAlert, risk: RiskAnalysis, rules: list) -> str:
+def build_expert_prompt(alert: NormalizedAlert, risk: RiskAnalysis, rules: list, past: list | None = None) -> str:
     facts = "\n".join(f"- {f.name} = {f.value} (source: {f.source})" for f in alert.facts) or "- none"
     computed = risk.model_dump(exclude={"evidence_completeness"})
     raw_alert = {"alerts": alert.alert_names, "labels": alert.labels, "annotations": alert.annotations, "context": alert.free_text}
@@ -115,17 +116,23 @@ COMPUTED ANALYSIS (authoritative, from code):
 EXPERT RULES (cite by id):
 {chr(10).join(r.prompt_block() for r in rules)}
 
-<untrusted_alert_data>
+{(feedback.prompt_block(past) + chr(10) + chr(10)) if past else ""}<untrusted_alert_data>
 {_sanitize(json.dumps(raw_alert, indent=2))}
 </untrusted_alert_data>
 """
 
 
-def run_expert(raw: str | dict, model: str | None = None, use_cache: bool = False) -> Result:
+def run_expert(raw: str | dict, model: str | None = None, use_cache: bool = False, use_feedback: bool = False) -> Result:
+    """use_feedback=False keeps the evaluation independent of the local incident history."""
     res = Result(mode="expert", report=None)
     alert, risk, rules, trace = prepare_expert(raw)
     res.alert, res.risk, res.rule_ids, res.trace = alert, risk, [r.id for r in rules], trace
-    prompt = build_expert_prompt(alert, risk, rules)
+    if use_feedback:
+        t = time.time()
+        res.past_incidents = feedback.similar(alert)
+        res.trace.append({"step": "Retrieve similar past incidents", "ms": int(1000 * (time.time() - t)),
+                          "detail": ", ".join(f"{i.id} ({i.outcome})" for i in res.past_incidents) or "none"})
+    prompt = build_expert_prompt(alert, risk, rules, res.past_incidents)
     t = time.time()
     try:
         report, res.meta = _call(EXPERT_SYSTEM, prompt, model, use_cache)
@@ -137,7 +144,7 @@ def run_expert(raw: str | dict, model: str | None = None, use_cache: bool = Fals
                       "detail": f"{res.meta.get('model')} {'(cached)' if res.meta.get('cached') else ''}"})
     res.raw_report = report.model_copy(deep=True)
     t = time.time()
-    res.report, res.guard_log = validate_and_guard(report, risk, load_expertise(), set(res.rule_ids))
+    res.report, res.guard_log = validate_and_guard(report, risk, load_expertise(), set(res.rule_ids), res.past_incidents)
     res.trace.append({"step": "Output validation & safety guard", "ms": int(1000 * (time.time() - t)),
                       "detail": f"{len(res.guard_log)} interventions"})
     return res
@@ -151,6 +158,7 @@ def to_dict(res: Result) -> dict[str, Any]:
         "risk": res.risk.model_dump() if res.risk else None,
         "rule_ids": res.rule_ids,
         "guard_log": res.guard_log,
+        "past_incidents": [i.model_dump() for i in res.past_incidents],
         "report": res.report.model_dump() if res.report else None,
         "raw_report": res.raw_report.model_dump() if res.raw_report else None,
     }

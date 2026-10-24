@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 
 from .expert_engine import Expertise
+from .feedback import matches_bad_outcome
 from .schemas import Action, DangerousOp, Report, RiskAnalysis
 
 
@@ -37,7 +38,7 @@ def unapproved_dangerous_actions(report: Report, expertise: Expertise) -> list[d
 
 
 def validate_and_guard(report: Report, risk: RiskAnalysis, expertise: Expertise,
-                       allowed_rule_ids: set[str]) -> tuple[Report, list[str]]:
+                       allowed_rule_ids: set[str], past_incidents: list | None = None) -> tuple[Report, list[str]]:
     """Returns the guarded report and a log of every intervention (shown in the UI trace)."""
     log: list[str] = []
 
@@ -78,7 +79,17 @@ def validate_and_guard(report: Report, risk: RiskAnalysis, expertise: Expertise,
                 report.dangerous_operations.append(DangerousOp(operation=label, why_dangerous=expertise.rules[rids[0]].title, rule_id=rids[0]))
                 known_ops.add(label)
 
-    # 4. Missing context from the analyzer must be visible even if the model forgot it.
+    # 4. An action that made things worse in a similar past incident always needs approval.
+    for a in report.immediate_actions:
+        bad = matches_bad_outcome(a.action, past_incidents or [])
+        if bad:
+            note = f"Past incident {bad.id} ({bad.ts}): a similar action MADE IT WORSE. {bad.note}"
+            if not a.requires_approval:
+                a.requires_approval = True
+                log.append(f"Forced approval on '{a.action[:80]}': made things worse in {bad.id}.")
+            a.guard_note = (a.guard_note + " " + note).strip()
+
+    # 5. Missing context from the analyzer must be visible even if the model forgot it.
     listed = " ".join(m.item.lower() for m in report.missing_context)
     for k in risk.missing_context:
         words = k.replace("_bytes", "").replace("_", " ")

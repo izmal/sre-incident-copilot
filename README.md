@@ -23,11 +23,21 @@ Alert JSON / text
   → Normalizer          parses Alertmanager JSON, units (GiB, MiB/min), metrics from text      src/normalizer.py
   → Risk analyzer       deterministic used %, time-to-exhaustion, urgency policy (no LLM math)  src/risk_analyzer.py
   → Expert rule engine  picks matching YAML rules (Linux / Kubernetes / MongoDB / global)       src/expert_engine.py
+  → Incident history    similar past incidents + their outcomes (helped / no effect / worse)   src/feedback.py
   → Gemma 4             writes the plan from facts + rules; alert text is fenced as untrusted   src/pipeline.py, src/llm_provider.py
   → Output guard        schema check, real rule ids only, urgency from code, dangerous          src/output_validator.py
-                        actions forced to "needs approval"
-  → UI                  plan, missing context, trace, side-by-side with plain Gemma             app.py
+                        actions and actions that made things worse before forced to "needs approval"
+  → UI                  plan, missing context, trace, side-by-side with plain Gemma,            app.py
+                        "close the loop" form that records the outcome
 ```
+
+**Feedback loop.** After the incident the engineer records which actions were taken and whether they
+✅ helped, ➖ had no effect or ❌ made it worse (saved to `feedback/incidents.jsonl`). On the next similar alert
+(same component and category, ranked by alert name, host and bad outcomes first) the past incidents go into the prompt,
+and code forces human approval on any action that resembles one that made things worse before.
+The repo ships 5 synthetic past incidents ([`feedback/seed_incidents.jsonl`](feedback/seed_incidents.jsonl)) so the demo shows the effect:
+for the MongoDB scenario the Copilot first suggests pausing the noisy writer (it helped in `inc-seed02`) and flags
+`compact` with "made it worse in `inc-seed01`".
 
 Scope of the MVP: **storage pressure** on Linux filesystems, Kubernetes PVCs and MongoDB (WiredTiger, replica sets).
 
@@ -142,6 +152,7 @@ Full table: [`evaluation/results/summary.md`](evaluation/results/summary.md). Ra
 - Free-text metric extraction is regex-based; structured `observed_metrics` is more reliable.
 - Rules reflect one engineer's experience and need review for your environment (thresholds are config).
 - The rubric is keyword-based: it checks that key points are present, not that the prose is perfect. 11 cases are indicative, not proof.
+- Incident history matching is simple (component + category + alert name/host); the evaluation runs **without** history so its numbers do not depend on local feedback. The history file is local and per installation.
 - Alert text is sent to the Gemini API (hosted). Use synthetic or anonymized data; secrets in alerts are not scrubbed yet.
 
 ## Safety
@@ -153,7 +164,7 @@ Full table: [`evaluation/results/summary.md`](evaluation/results/summary.md). Ra
 
 ## Roadmap
 
-- **Feedback loop** (`global.learning.001` in code): after an incident the engineer marks each recommendation as helped / no effect / made it worse; outcomes are stored per alert type, similar past incidents are added to the prompt, and repeated bad outcomes are proposed as new constraints for review.
+- Feedback loop, next steps: turn repeated bad outcomes into proposed YAML constraints for expert review; semantic similarity instead of component/category matching; shared storage instead of a local file.
 - Prometheus/Alertmanager webhook integration and read-only PromQL / `kubectl` tools (real trends instead of a single growth rate, `offset 1w` comparisons), with traces.
 - More domains: PostgreSQL WAL, Kafka retention, memory/CPU saturation, 5xx (where the "don't scale into a cascade" rule matters most).
 - Local inference via Ollama.

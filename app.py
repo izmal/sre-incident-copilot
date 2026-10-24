@@ -7,6 +7,7 @@ from pathlib import Path
 
 import streamlit as st
 
+from src import feedback
 from src.expert_engine import load_expertise
 from src.output_validator import unapproved_dangerous_actions
 from src.pipeline import Result, prepare_expert, run_baseline, run_expert
@@ -27,8 +28,10 @@ with st.sidebar:
     choice = st.selectbox("Demo scenario", titles, index=1)
     model = st.selectbox("Model (Gemini API)", MODELS)
     compare = st.toggle("Compare with plain Gemma (baseline)", value=True)
+    use_history = st.toggle("Use team incident history (feedback loop)", value=True,
+                            help="Similar past incidents and their outcomes are added to the prompt; actions that made things worse before always need approval.")
     use_cache = st.toggle("Replay recorded answers (offline / quota fallback)", value=False,
-                          help="Unedited demo scenarios reuse the Gemma responses recorded by the evaluation run. Edited or new input always calls the API.")
+                          help="Unedited demo scenarios reuse the Gemma responses recorded by the evaluation run (recorded without incident history). Edited or new input always calls the API.")
     st.markdown("---")
     st.markdown("Accepts **Alertmanager webhook JSON**, a single alert, `{alerts, observed_metrics, context}` or plain text.")
     st.markdown("Use synthetic or anonymized data only: the text is sent to the Gemini API.")
@@ -41,8 +44,9 @@ else:
 raw = st.text_area("Alert payload / description", value=default, height=260, key=f"input-{choice}")
 go = st.button("Analyze", type="primary", disabled=not raw.strip())
 
-tab_names = ["Analysis", "Expert rules", "Evaluation results"]
-tab_main, tab_rules, tab_eval = st.tabs(tab_names)
+tab_names = ["Analysis", "Expert rules", "Incident history", "Evaluation results"]
+tab_main, tab_rules, tab_hist, tab_eval = st.tabs(tab_names)
+OUTCOME_LABEL = {"helped": "✅ helped", "no_effect": "➖ no effect", "made_worse": "❌ made it worse"}
 
 
 def render_risk(res: Result):
@@ -101,6 +105,11 @@ def render_report(res: Result, expert: bool):
         for d in rep.dangerous_operations:
             st.markdown(f"- ⛔ {d.operation}: {d.why_dangerous}" + (f" `{d.rule_id}`" if d.rule_id else ""))
 
+    if expert and res.past_incidents:
+        st.markdown("**Similar past incidents used**")
+        for i in res.past_incidents:
+            st.markdown(f"- {OUTCOME_LABEL[i.outcome]} `{i.id}` {i.ts}: {'; '.join(i.actions_taken)}  \n  *{i.note}*")
+
     if rep.applied_expert_rules:
         st.markdown("**Applied expert rules:** " + ", ".join(f"`{x}`" for x in rep.applied_expert_rules))
     if rep.incident_update:
@@ -114,7 +123,7 @@ with tab_main:
         alert, risk, rules, _ = prepare_expert(raw)
         with st.spinner("Asking Gemma 4… (expert mode ~20-35s)"):
             with ThreadPoolExecutor(2) as pool:
-                fe = pool.submit(run_expert, raw, model, use_cache)
+                fe = pool.submit(run_expert, raw, model, use_cache, use_history and not use_cache)
                 fb = pool.submit(run_baseline, raw, model, use_cache) if compare else None
                 exp_res = fe.result()
                 base_res = fb.result() if fb else None
@@ -138,6 +147,22 @@ with tab_main:
                 st.markdown("**Safety guard interventions:**")
                 for g in exp_res.guard_log:
                     st.markdown(f"- {g}")
+        if exp_res.report:
+            st.subheader("🔁 Close the loop: what happened?")
+            st.caption("Record the outcome once the incident is handled. It is saved to feedback/incidents.jsonl and used for similar alerts next time.")
+            with st.form("feedback_form", clear_on_submit=True):
+                outcome = st.radio("Outcome", list(OUTCOME_LABEL), format_func=OUTCOME_LABEL.get, horizontal=True)
+                taken = st.multiselect("Actions you actually took", [a.action for a in exp_res.report.immediate_actions])
+                other = st.text_input("Other action (optional)")
+                note = st.text_area("What happened? (optional)", height=80)
+                if st.form_submit_button("Save outcome"):
+                    actions = taken + ([other] if other.strip() else [])
+                    if not actions:
+                        st.warning("Pick or describe at least one action.")
+                    else:
+                        inc = feedback.record(exp_res.alert, exp_res.report.assessment.urgency, actions, outcome, note,
+                                              exp_res.report.applied_expert_rules)
+                        st.success(f"Saved as {inc.id}. Next similar alert will see it.")
         with st.expander("Raw JSON"):
             st.json({"expert": exp_res.report.model_dump() if exp_res.report else exp_res.error,
                      "baseline": base_res.report.model_dump() if base_res and base_res.report else None})
@@ -150,6 +175,13 @@ with tab_rules:
     for f in sorted((ROOT / "expertise").glob("*.yaml")):
         with st.expander(f"{f.name}  ·  {sum(1 for r in exp.rules.values() if r.file == f.name)} rules"):
             st.code(f.read_text(), language="yaml")
+
+with tab_hist:
+    items = feedback.load_all()
+    st.markdown(f"{len(items)} incidents · seed history is synthetic, new outcomes are saved in `feedback/incidents.jsonl`.")
+    for i in sorted(items, key=lambda x: x.ts, reverse=True):
+        st.markdown(f"- {OUTCOME_LABEL[i.outcome]} **{i.ts}** `{i.id}` {i.component}/{i.category} on {i.instance or '-'}"
+                    f"{' (synthetic)' if i.synthetic else ''}: {'; '.join(i.actions_taken)}  \n  *{i.note}*")
 
 with tab_eval:
     summary = ROOT / "evaluation" / "results" / "summary.md"
