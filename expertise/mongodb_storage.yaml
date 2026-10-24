@@ -1,0 +1,91 @@
+version: 1
+domain: mongodb
+
+rules:
+  - id: mongo.storage.001
+    title: Deleting documents does not give disk space back to the OS
+    applies_to: {components: [mongodb], categories: [disk_pressure]}
+    rationale: >
+      WiredTiger keeps freed blocks inside the data files and reuses them for new
+      writes. A big deleteMany slows future growth but filesystem usage stays the
+      same. Teams often delete data at 2am, see no change and panic further.
+    required_context: [filesystem_available_bytes, filesystem_size_bytes, growth_rate_bytes_per_hour]
+    checks:
+      - "db.collection.stats().wiredTiger['block-manager']['file bytes available for reuse'] or db.stats().freeStorageSize to see reusable space"
+      - Compare storageSize vs dataSize per collection.
+    constraints:
+      - Never present document deletion as a way to immediately free filesystem space.
+    dangerous_actions:
+      - {label: "bulk delete of documents", pattern: 'deleteMany|\bremove\(\s*\{|delete (old|historical|unused) (documents|records|data)'}
+
+  - id: mongo.storage.002
+    title: compact is not a risk-free emergency fix
+    applies_to: {components: [mongodb], categories: [disk_pressure]}
+    rationale: >
+      compact rewrites a collection, generates heavy I/O, may need extra space
+      while running and on older versions blocks the database. Run it only on a
+      secondary, one member at a time, after confirming replica set health.
+    constraints:
+      - compact must be requires_approval=true and never run on the primary during an incident.
+    dangerous_actions:
+      - {label: "compact", pattern: '\bcompact\b'}
+
+  - id: mongo.storage.003
+    title: Replica set role defines the blast radius
+    applies_to: {components: [mongodb], categories: [disk_pressure]}
+    rationale: >
+      A full secondary stops replicating: redundancy drops, but writes continue.
+      A full primary stops accepting writes: a user-facing outage, followed by an
+      election. Before any action check rs.status(): healthy members, lag, and
+      whether the set still survives one more failure.
+    required_context: [replica_set_role, replication_lag_seconds, replica_set_healthy_members]
+    checks:
+      - "rs.status(): member states, optimeDate, health"
+      - "rs.printSecondaryReplicationInfo(): replication lag"
+      - Check free disk on the OTHER members: they usually grow at the same rate.
+    constraints:
+      - Do not resync or restart a member if the set would lose majority.
+      - rs.stepDown() on the primary requires approval and a healthy, caught-up secondary.
+    dangerous_actions:
+      - {label: "initial sync / resync", pattern: '\bresync|initial sync|wipe (the )?(data|dbpath)'}
+      - {label: "step down primary", pattern: 'stepDown'}
+      - {label: "restart/kill mongod", pattern: '(restart|kill|stop)\w*\s+(the\s+)?mongod'}
+
+  - id: mongo.storage.004
+    title: Leave the oplog alone during a disk incident
+    applies_to: {components: [mongodb], categories: [disk_pressure]}
+    rationale: >
+      The oplog is a capped collection: it does not grow without bound, so it is
+      rarely the growth source. Shrinking it reduces the replication window and
+      can force a full resync of lagging secondaries.
+    constraints:
+      - Do not propose replSetResizeOplog as mitigation.
+    dangerous_actions:
+      - {label: "resize oplog", pattern: 'replSetResizeOplog|(shrink|resiz|reduc)\w*\s+(the\s+)?oplog'}
+
+  - id: mongo.storage.005
+    title: Find the growth source before anything else
+    applies_to: {components: [mongodb], categories: [disk_pressure]}
+    rationale: >
+      Typical sources: a collection that lost its TTL index or whose TTL monitor
+      lags, a release that writes more or bigger documents, new indexes, a
+      runaway log in the dbPath volume, diagnostic.data or journal on the same disk.
+    checks:
+      - "db.stats() and per-collection collStats sorted by storageSize, totalIndexSize"
+      - "db.collection.getIndexes() to confirm TTL indexes exist (expireAfterSeconds)"
+      - Correlate the growth start with deploys and write-op metrics (opcounters).
+      - du -sh on dbPath subfolders, /var/log/mongodb and diagnostic.data
+    constraints:
+      - Log rotation via db.adminCommand({logRotate: 1}) is a safe way to reclaim log space.
+
+  - id: mongo.storage.006
+    title: Never touch files in dbPath or drop collections as cleanup
+    applies_to: {components: [mongodb], categories: [disk_pressure]}
+    rationale: >
+      Removing WiredTiger files by hand corrupts the node. Dropping a collection
+      "that looks unused" is irreversible without a verified backup and owner sign-off.
+    constraints:
+      - Dropping collections/databases requires owner confirmation, a verified backup and approval.
+    dangerous_actions:
+      - {label: "drop collection/database", pattern: '\.drop\(|dropDatabase|\bdrop(ping)?\s+(the\s+|an?\s+|unused\s+|old\s+)*(collection|database|db)\b'}
+      - {label: "delete files in dbPath", pattern: '(rm|delet\w*|remov\w*)\s+.{0,40}(/var/lib/mongo|dbpath|\.wt\b|journal)'}

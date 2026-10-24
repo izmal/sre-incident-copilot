@@ -1,0 +1,57 @@
+version: 1
+domain: kubernetes
+
+rules:
+  - id: k8s.storage.001
+    title: PVC expansion is possible only if StorageClass and CSI allow it
+    applies_to: {components: [kubernetes], categories: [disk_pressure]}
+    rationale: >
+      Expansion needs allowVolumeExpansion=true on the StorageClass and a CSI
+      driver that supports it. Some drivers resize the filesystem only after the
+      pod restarts (FileSystemResizePending). Volumes can never be shrunk back.
+    required_context: [storage_class, allow_volume_expansion]
+    checks:
+      - "kubectl get storageclass <sc> -o jsonpath='{.allowVolumeExpansion}'"
+      - "kubectl describe pvc <name>: look for FileSystemResizePending / resize errors"
+      - Check cloud quota for the disk type and the CSI driver docs for online resize.
+    constraints:
+      - Never present PVC expansion as guaranteed; state the preconditions.
+
+  - id: k8s.storage.002
+    title: StatefulSet volumeClaimTemplates cannot be edited in place
+    applies_to: {components: [kubernetes], categories: [disk_pressure]}
+    rationale: >
+      To grow StatefulSet volumes, patch each PVC; the template change requires
+      deleting the StatefulSet with --cascade=orphan and recreating it. Deleting it
+      without orphan restarts all replicas at once.
+    constraints:
+      - Deleting a StatefulSet requires --cascade=orphan and approval.
+    dangerous_actions:
+      - {label: "delete statefulset", pattern: 'kubectl\s+delete\s+(statefulset|sts)\b'}
+      - {label: "scale stateful workload to zero", pattern: 'scale\s+.{0,40}--replicas[= ]0'}
+
+  - id: k8s.storage.003
+    title: Never delete a PVC/PV to recreate it bigger
+    applies_to: {components: [kubernetes], categories: [disk_pressure]}
+    rationale: >
+      With reclaimPolicy=Delete (the default for dynamic provisioning) deleting the
+      PVC destroys the disk and the data. Migration to a new volume needs a
+      snapshot/backup and a copy plan.
+    required_context: [reclaim_policy]
+    checks:
+      - "kubectl get pv <pv> -o jsonpath='{.spec.persistentVolumeReclaimPolicy}'"
+      - Check VolumeSnapshot support before any migration.
+    dangerous_actions:
+      - {label: "delete pvc/pv", pattern: 'kubectl\s+delete\s+(pvc|pv|persistentvolume\w*)\b|\bdelet\w*\s+(the\s+)?(pvc|persistent\s*volume)'}
+      - {label: "force delete pod", pattern: 'delete\s+pod.{0,40}--force|--grace-period=0'}
+
+  - id: k8s.storage.004
+    title: Find what fills the volume from inside the workload
+    applies_to: {components: [kubernetes], categories: [disk_pressure, inode_exhaustion]}
+    rationale: >
+      kubelet_volume_stats_* shows that the PVC grows, not why. Look inside the pod
+      and at the application retention settings (WAL, segments, logs, uploads).
+    checks:
+      - "PromQL: predict_linear(kubelet_volume_stats_available_bytes{persistentvolumeclaim=\"...\"}[6h], 4*3600)"
+      - "kubectl exec <pod> -- du -xh --max-depth=2 /data | sort -h | tail"
+      - Check app retention config (e.g. Postgres WAL/archiving, Kafka retention.bytes, log level).

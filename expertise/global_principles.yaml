@@ -1,0 +1,81 @@
+# Global SRE principles and urgency policy.
+# Thresholds are configuration, not universal truths: tune them for your org.
+version: 1
+
+principles:
+  - prioritize_service_availability
+  - prefer_reversible_operations
+  - separate_mitigation_from_root_cause
+  - consider_infrastructure_cost
+  - never_assume_data_deletion_is_safe
+  - say_unknown_instead_of_guessing
+
+# Deterministic urgency policy used by src/risk_analyzer.py.
+# Urgency is computed from time-to-exhaustion (TTE), headroom and impact,
+# never from the monitoring `severity` label alone.
+urgency:
+  critical:
+    tte_hours_max: 2
+    available_pct_max: 2
+    inode_free_pct_max: 2
+    user_impact: true
+  high:
+    tte_hours_max: 12
+    inode_free_pct_max: 10
+    # usage known, growth unknown, but almost no headroom left
+    available_pct_max_without_growth: 3
+  medium:
+    tte_hours_max: 72
+    # stable or shrinking usage, but little operational headroom
+    available_pct_max_when_stable: 5
+  # everything else with known growth -> low
+  # nothing known about growth and headroom not critical -> unknown
+  stale_metrics_minutes: 30
+
+rules:
+  - id: global.safety.001
+    title: Destructive operations are never immediate safe actions
+    applies_to: {components: [any], categories: [any]}
+    rationale: >
+      Under time pressure engineers (and LLMs) reach for deletes, drops and
+      restarts. Most storage incidents leave hours of runway; an irreversible
+      action taken in minutes can turn a capacity incident into data loss.
+    constraints:
+      - Any delete/drop/truncate/format/restart of production data or services must be marked requires_approval=true.
+      - Verify what data is and who owns it before proposing removal.
+    dangerous_actions:
+      - {label: "recursive delete", pattern: '\brm\s+-[a-z]*r[a-z]*f?\b|\brm\s+-[a-z]*f[a-z]*r'}
+      - {label: "truncate files", pattern: '\btruncate\s+-s|>\s*/var/'}
+      - {label: "format filesystem", pattern: '\bmkfs\b|\breformat'}
+      - {label: "fsck on mounted fs", pattern: '\bfsck\b'}
+
+  - id: global.capacity.001
+    title: Do not default to "just add disk"
+    applies_to: {components: [any], categories: [disk_pressure]}
+    rationale: >
+      Expanding storage buys time but hides the cause (missing retention, debug
+      logging, runaway writes) and costs money every month. Expansion is a valid
+      mitigation when TTE is short, but the growth source must still be found.
+    checks:
+      - Compare current growth rate with the historical baseline (7d / 30d).
+      - Identify the top growing directories, collections or volumes.
+    constraints:
+      - If you propose expansion, also propose finding the growth source.
+
+  - id: global.triage.001
+    title: Separate mitigation from root cause
+    applies_to: {components: [any], categories: [any]}
+    rationale: >
+      First buy time safely (stabilize), then investigate. Mixing both leads to
+      risky changes during the incident.
+    constraints:
+      - immediate_actions must be about buying time or reducing risk; investigation goes to investigation_steps.
+
+  - id: global.evidence.001
+    title: No invented numbers
+    applies_to: {components: [any], categories: [any]}
+    rationale: >
+      Time-to-exhaustion from a single percentage is fiction. If growth rate,
+      size or freshness of metrics is unknown, say so and ask for it.
+    constraints:
+      - Use only the computed metrics provided; list missing ones in missing_context.
